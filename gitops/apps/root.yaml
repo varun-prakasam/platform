@@ -1,0 +1,36 @@
+# App-of-apps root.
+#
+# This is the only thing applied by hand. Everything else on the cluster is delivered by ArgoCD
+# syncing the manifests under gitops/apps/projects, each of which points at an individual project
+# repository.
+#
+# Not applied yet: the platform repo does not exist on GitHub. Apply this once it is pushed —
+# until then ArgoCD would report the child applications as unknown.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/varun-prakasam/platform.git
+    targetRevision: main
+    path: gitops/apps/projects
+    directory:
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,44 @@
+# Eviction order when the node fills up.
+#
+# Without these every pod is priority zero and the kubelet evicts on resource usage alone, which
+# on a single-node cluster means a Spark driver can evict the Kafka broker. The ordering below
+# encodes what the platform can actually afford to lose: batch work is retried, stateful engines
+# are not.
+
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: platform-critical
+value: 1000000
+globalDefault: false
+description: >-
+  Cluster infrastructure that everything else depends on: ArgoCD, operators, monitoring.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: stateful-engine
+value: 100000
+globalDefault: false
+description: >-
+  Always-on data engines whose downtime is visible on the public portfolio: Kafka, Flink,
+  StarRocks, Postgres, the Airflow scheduler.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: pipeline-default
+value: 1000
+globalDefault: true
+description: >-
+  Default for scheduled pipeline work: dbt runs, quality checks, ingestion CronJobs.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: batch-preemptible
+value: 100
+globalDefault: false
+description: >-
+  Spark executors and other retry-safe batch work. First to be evicted, and pinned to the Spot
+  node pool by the workload-class toleration.

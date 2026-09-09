@@ -1,0 +1,67 @@
+# Scopes what the portfolio's applications are permitted to do.
+#
+# The default AppProject allows any source repo to deploy any resource to any namespace, which
+# defeats the purpose of having a GitOps controller with cluster-admin. This one constrains
+# deployments to the ten project namespaces and denies the cluster-scoped resources none of them
+# legitimately need.
+
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: portfolio
+  namespace: argocd
+spec:
+  description: Ten data engineering projects
+
+  sourceRepos:
+    - https://github.com/varun-prakasam/*
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: p01-streaming
+    - server: https://kubernetes.default.svc
+      namespace: p02-lakehouse
+    - server: https://kubernetes.default.svc
+      namespace: p03-elt
+    - server: https://kubernetes.default.svc
+      namespace: p04-orchestration
+    - server: https://kubernetes.default.svc
+      namespace: p05-cdc
+    - server: https://kubernetes.default.svc
+      namespace: p06-quality
+    - server: https://kubernetes.default.svc
+      namespace: p07-vector
+    - server: https://kubernetes.default.svc
+      namespace: p08-olap
+    - server: https://kubernetes.default.svc
+      namespace: p09-features
+    - server: https://kubernetes.default.svc
+      namespace: p10-governance
+    # Operators install CRDs and controllers into their own namespaces.
+    - server: https://kubernetes.default.svc
+      namespace: operators
+
+  # CRDs are required: the Flink, StarRocks, Strimzi and CloudNativePG operators all ship them.
+  clusterResourceWhitelist:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: ""
+      kind: Namespace
+    - group: storage.k8s.io
+      kind: StorageClass
+    - group: scheduling.k8s.io
+      kind: PriorityClass
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+
+  namespaceResourceBlacklist:
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange

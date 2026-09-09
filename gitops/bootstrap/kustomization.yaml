@@ -1,0 +1,60 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: argocd
+
+# Pin the ArgoCD version explicitly. `stable` is a moving tag, and a GitOps controller that
+# upgrades itself out from under you on an unrelated apply is the opposite of the point.
+#
+# Check the current release before first install and update this ref:
+#   https://github.com/argoproj/argo-cd/releases
+resources:
+  - namespace.yaml
+  - priorityclasses.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.2/manifests/install.yaml
+
+patches:
+  # The stock install assumes a cluster with room to spare. This one runs alongside Kafka, Flink,
+  # StarRocks and Airflow on a single node, so every component gets explicit requests — otherwise
+  # ArgoCD's burstable pods compete with the stateful engines during a sync.
+  #
+  # A JSON patch rather than a strategic merge: the target is a name regex covering four
+  # deployments whose container names all differ, and strategic merge has no way to address
+  # "the only container" generically.
+  - target:
+      kind: Deployment
+      name: argocd-(server|repo-server|applicationset-controller|notifications-controller)
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+
+  - path: patches/resources-statefulset.yaml
+    target:
+      kind: StatefulSet
+      name: argocd-application-controller
+
+  # Dex provides SSO against external identity providers. Access here is via port-forward and the
+  # local admin account, so it is dead weight — roughly 100 MiB for nothing.
+  - path: patches/disable-dex.yaml
+    target:
+      kind: Deployment
+      name: argocd-dex-server
+
+configMapGenerator:
+  - name: argocd-cm
+    behavior: merge
+    literals:
+      - timeout.reconciliation=180s
+      - application.instanceLabelKey=argocd.argoproj.io/instance
+
+generatorOptions:
+  disableNameSuffixHash: true

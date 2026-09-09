@@ -1,0 +1,62 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+# --- Required -------------------------------------------------------------------------------------
+
+project_id         = "your-gcp-project-id"
+billing_account_id = "XXXXXX-XXXXXX-XXXXXX"
+
+# CIDRs allowed to reach the GKE control plane. Find your public IP with: curl -s ifconfig.me
+authorized_networks = [
+  {
+    cidr_block   = "203.0.113.42/32"
+    display_name = "home"
+  },
+]
+
+# --- Deployer identity ----------------------------------------------------------------------------
+# The service account Terraform authenticates as. Terraform cannot create the identity it runs as,
+# so grant its roles first:
+#
+#   make grant-deployer-bootstrap \
+#     PROJECT_ID=your-gcp-project-id \
+#     DEPLOYER_SA=terraform-deployer@your-gcp-project-id.iam.gserviceaccount.com \
+#     BILLING_ACCOUNT_ID=XXXXXX-XXXXXX-XXXXXX
+#
+# Then set it here, and the same bindings come under Terraform management so they cannot drift.
+# Leave commented out if you apply as an owner user rather than a service account.
+#
+# deployer_service_account_email = "terraform-deployer@your-gcp-project-id.iam.gserviceaccount.com"
+
+# --- Location -------------------------------------------------------------------------------------
+# BigQuery, GCS and GKE must share a region for BigLake Iceberg tables to work.
+
+region = "us-central1"
+zone   = "us-central1-a"
+
+# --- Cost -----------------------------------------------------------------------------------------
+
+# Monthly ceiling. Alerts fire at 50%, 80% and 100% of actual spend, plus a forecast alert.
+budget_amount = 250
+alert_email   = "you@example.com"
+
+# The single largest cost lever.
+#   e2-highmem-4   4 vCPU / 32 GiB  ~$130/mo  full ten-project build-out
+#   e2-highmem-2   2 vCPU / 16 GiB   ~$65/mo  first three or four projects
+#   e2-standard-2  2 vCPU /  8 GiB   ~$49/mo  platform plus one lightweight project
+#
+# Start small. Scaling up later is a one-line change and a rolling node pool replacement.
+base_node_machine_type = "e2-highmem-2"
+
+# --- Billing export -------------------------------------------------------------------------------
+# Leave these until the export is enabled in the console and has written its first partition.
+
+# billing_export_table = "gcp_billing_export_resource_v1_XXXXXX_XXXXXX_XXXXXX"
+# create_cost_views    = true
+
+# --- Optional -------------------------------------------------------------------------------------
+
+# GitHub account owning the portfolio repos. Leave unset until the repos exist; enables keyless CI.
+# github_owner = "your-github-username"
+
+# Set false only when you intend to tear the platform down.
+cluster_deletion_protection = true

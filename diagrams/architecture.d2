@@ -1,0 +1,297 @@
+# Master architecture for the ten-project data engineering portfolio.
+#
+# Render:  make diagram      (d2 --layout=elk --theme=1)
+#
+# The cross-project edges near the bottom are the point of this diagram. Ten isolated pipelines
+# would be a collection; the fact that project 8 serves project 2's tables, project 6 monitors
+# everything and project 10 catalogues everything is what makes it a platform.
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 1
+  }
+}
+
+title: |md
+  # Data Engineering Portfolio — Platform Architecture
+| {near: top-center}
+
+# =================================================================================================
+# External data sources
+# =================================================================================================
+
+sources: Public data sources {
+  style.fill: "#f8fafc"
+  style.stroke: "#94a3b8"
+
+  bluesky: |md
+    **Bluesky Jetstream**
+    WebSocket firehose
+    ~500 events/sec
+  |
+  gharchive: |md
+    **GH Archive**
+    Hourly JSON, live since 2011
+  |
+  openmeteo: |md
+    **Open-Meteo + NYC 311**
+    Daily REST / Socrata
+  |
+  opensky: |md
+    **OpenSky + BTS**
+    Live flight states
+  |
+  arxiv: |md
+    **arXiv + SEC EDGAR**
+    Daily filings and papers
+  |
+  gbfs: |md
+    **Citi Bike GBFS**
+    Station status, ~10s
+  |
+  openaq: |md
+    **OpenAQ**
+    Air quality sensors
+  |
+  synthetic: |md
+    **Synthetic OLTP**
+    Generated e-commerce txns
+  |
+}
+
+# =================================================================================================
+# GKE — every stateful engine
+# =================================================================================================
+
+gke: GKE (zonal, Standard) {
+  style.fill: "#eff6ff"
+  style.stroke: "#3b82f6"
+  style.stroke-width: 2
+
+  platform: Platform services {
+    style.fill: "#dbeafe"
+    argocd: ArgoCD
+    prom: Managed Prometheus
+    operators: |md
+      **Operators**
+      Flink · Strimzi · StarRocks
+      Spark · CloudNativePG
+    |
+  }
+
+  p01: 1 · Streaming {
+    style.fill: "#ffffff"
+    redpanda: Redpanda (Kafka)
+    flink: Flink SQL\nwindowing, watermarks
+  }
+
+  p02: 2 · Lakehouse {
+    style.fill: "#ffffff"
+    spark: Spark\ncompaction, MERGE
+  }
+
+  p03: 3 · ELT {
+    style.fill: "#ffffff"
+    dlt: dlt extract
+    dbt: dbt Core\nCronJob
+  }
+
+  p04: 4 · Orchestration {
+    style.fill: "#ffffff"
+    airflow: Airflow 3\nKubernetesExecutor
+  }
+
+  p05: 5 · CDC {
+    style.fill: "#ffffff"
+    pg: Postgres\n(logical decoding)
+    debezium: Debezium
+    beam: Beam\non Flink runner
+  }
+
+  p06: 6 · Data quality {
+    style.fill: "#ffffff"
+    soda: Soda / GE checks
+    marquez: Marquez\nOpenLineage
+  }
+
+  p07: 7 · Vector {
+    style.fill: "#ffffff"
+    chunker: Parse + chunk
+  }
+
+  p08: 8 · Real-time OLAP {
+    style.fill: "#ffffff"
+    starrocks: StarRocks\nshared-data mode
+  }
+
+  p09: 9 · Feature store {
+    style.fill: "#ffffff"
+    feast: Feast\nmaterialization
+  }
+}
+
+# =================================================================================================
+# Managed GCP services
+# =================================================================================================
+
+storage: Storage and warehouse {
+  style.fill: "#f0fdf4"
+  style.stroke: "#22c55e"
+
+  gcs: |md
+    **GCS**
+    Raw zone · Iceberg warehouse
+    Flink state · StarRocks data
+  |
+  bq: |md
+    **BigQuery**
+    Medallion datasets
+    BigLake · VECTOR_SEARCH
+  |
+}
+
+managed: Managed processing {
+  style.fill: "#fefce8"
+  style.stroke: "#eab308"
+
+  dataflow: Dataflow\n(Beam runner comparison)
+  vertex: Vertex AI\nembeddings + pipelines
+  dataplex: Dataplex + DLP\ncatalog, PII, masking
+  firestore: Firestore\nFeast online store
+}
+
+# =================================================================================================
+# Serving
+# =================================================================================================
+
+serving: Serving {
+  style.fill: "#fdf4ff"
+  style.stroke: "#a855f7"
+
+  run: |md
+    **Cloud Run**
+    10 project APIs
+    scale to zero
+  |
+  hosting: |md
+    **Firebase Hosting**
+    10 project UIs + portfolio hub
+    static, instant load
+  |
+}
+
+hub: |md
+  ## Portfolio hub
+  Live health per project
+  Live GCP spend
+  This diagram
+| {
+  style.fill: "#1e293b"
+  style.font-color: "#f8fafc"
+  style.stroke: "#0f172a"
+  style.bold: true
+}
+
+# =================================================================================================
+# Ingestion
+# =================================================================================================
+
+sources.bluesky -> gke.p01.redpanda: WebSocket
+sources.gharchive -> storage.gcs: hourly pull
+sources.openmeteo -> gke.p03.dlt
+sources.opensky -> gke.p04.airflow
+sources.arxiv -> gke.p07.chunker
+sources.gbfs -> gke.p09.feast
+sources.openaq -> gke.p06.soda
+sources.synthetic -> gke.p05.pg: continuous writes
+
+# =================================================================================================
+# Within and out of the cluster
+# =================================================================================================
+
+gke.p01.redpanda -> gke.p01.flink
+gke.p01.flink -> storage.bq: Storage Write API
+gke.p01.flink -> storage.gcs: checkpoints
+
+storage.gcs -> gke.p02.spark: raw
+gke.p02.spark -> storage.gcs: Iceberg tables
+storage.gcs -> storage.bq: BigLake external
+
+gke.p03.dlt -> storage.bq: raw
+gke.p03.dbt -> storage.bq: staging → marts
+
+gke.p04.airflow -> storage.bq
+
+gke.p05.pg -> gke.p05.debezium: logical replication
+gke.p05.debezium -> gke.p01.redpanda: change events
+gke.p01.redpanda -> gke.p05.beam
+gke.p05.beam -> storage.bq: bronze → silver
+gke.p05.beam -> managed.dataflow: same pipeline,\nsecond runner {style.stroke-dash: 4}
+
+gke.p06.soda -> storage.bq
+gke.p06.marquez -> storage.bq
+
+gke.p07.chunker -> managed.vertex: embed
+managed.vertex -> storage.bq: vectors
+
+gke.p09.feast -> storage.bq: offline store
+gke.p09.feast -> managed.firestore: online store
+
+storage.bq -> managed.dataplex: catalog + classify
+
+# =================================================================================================
+# Cross-project edges — what makes this a platform rather than ten pipelines
+# =================================================================================================
+
+gke.p01.redpanda -> gke.p08.starrocks: {
+  label: Routine Load
+  style: {stroke: "#dc2626"; stroke-width: 3}
+}
+
+storage.gcs -> gke.p08.starrocks: {
+  label: Iceberg external catalog
+  style: {stroke: "#dc2626"; stroke-width: 3}
+}
+
+gke.p04.airflow -> gke.p06.marquez: {
+  label: OpenLineage events
+  style: {stroke: "#dc2626"; stroke-width: 3}
+}
+
+gke.p03.dbt -> gke.p06.marquez: {
+  label: OpenLineage events
+  style: {stroke: "#dc2626"; stroke-width: 3}
+}
+
+gke.p06.soda -> hub: {
+  label: health feed
+  style: {stroke: "#dc2626"; stroke-width: 3}
+}
+
+# =================================================================================================
+# Serving
+# =================================================================================================
+
+storage.bq -> serving.run
+gke.p08.starrocks -> serving.run: MySQL protocol\nvia Direct VPC egress
+managed.firestore -> serving.run
+serving.run -> serving.hosting
+storage.gcs -> serving.hosting: pre-materialised JSON
+serving.hosting -> hub
+
+managed.dataplex -> serving.run: catalog + masking demo
+
+# =================================================================================================
+# Cost
+# =================================================================================================
+
+billing: |md
+  **Cloud Billing export**
+  → BigQuery → cost views
+| {
+  style.fill: "#fef2f2"
+  style.stroke: "#ef4444"
+}
+
+billing -> hub: live monthly spend {style.stroke-dash: 4}

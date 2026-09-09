@@ -1,0 +1,259 @@
+name: terraform
+
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform.yml"
+
+permissions:
+  contents: read
+  # Required for Workload Identity Federation. Without it the OIDC token is never minted.
+  id-token: write
+  pull-requests: write
+
+env:
+  TF_VERSION: "1.9.8"
+  WORKING_DIR: terraform
+
+  # Input variables come from repository variables via TF_VAR_, not from a -var list. Plan and apply
+  # then read exactly the same inputs — a plan that was reviewed against different values than the
+  # apply uses is worse than no plan at all.
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT }}
+  TF_VAR_authorized_networks: ${{ vars.TF_AUTHORIZED_NETWORKS }}
+  TF_VAR_base_node_machine_type: ${{ vars.TF_BASE_NODE_MACHINE_TYPE }}
+  TF_VAR_deployer_service_account_email: ${{ vars.TF_DEPLOYER_SERVICE_ACCOUNT }}
+  TF_VAR_github_owner: ${{ github.repository_owner }}
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The platform authenticates with Workload Identity everywhere, so a service account key in
+      # this repository is always a mistake. Catching it at CI is the backstop for .gitignore, which
+      # only helps if the filename happens to match.
+      - name: Reject committed service account keys
+        run: |
+          set -euo pipefail
+
+          if git grep -lIE '"type"[[:space:]]*:[[:space:]]*"service_account"' -- . > /tmp/hits 2>/dev/null; then
+            echo "::error::Service account key material committed:"
+            cat /tmp/hits
+            exit 1
+          fi
+
+          if git grep -lI -- '-----BEGIN [A-Z ]*PRIVATE KEY-----' -- . > /tmp/hits 2>/dev/null; then
+            echo "::error::Private key committed:"
+            cat /tmp/hits
+            exit 1
+          fi
+
+          if git ls-files | grep -Ei '(^|/)(service-account.*\.json|.*-key\.json|.*\.json\.key|credentials\.json)$'; then
+            echo "::error::Key-shaped filename committed."
+            exit 1
+          fi
+
+          if git ls-files | grep -E '(^|/)(terraform\.tfvars|.*\.auto\.tfvars|\.env)$'; then
+            echo "::error::Local configuration committed. These may carry account identifiers."
+            exit 1
+          fi
+
+          echo "No key material found."
+
+  validate:
+    name: Format and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive -diff
+
+      # No backend: validation needs the provider schemas but not the remote state, and this keeps
+      # the job runnable on forks and without credentials.
+      - name: Init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform validate -no-color
+
+  lint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - run: tflint --init
+        working-directory: ${{ env.WORKING_DIR }}
+
+      - run: tflint --recursive --format compact
+        working-directory: ${{ env.WORKING_DIR }}
+
+  security:
+    name: checkov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ${{ env.WORKING_DIR }}
+          framework: terraform
+          quiet: true
+          output_format: cli
+          soft_fail: false
+          # Documented, deliberate deviations. Each is a decision, not an unreviewed finding:
+          #   CKV_GCP_66  binary authorization — no image signing pipeline on a solo portfolio
+          #   CKV_GCP_24  private endpoint — kubectl access is needed from a laptop
+          #   CKV_GCP_69  private cluster master — same
+          #   CKV_GCP_61  VPC flow logs sampling — enabled at 0.1 to control logging cost
+          skip_check: CKV_GCP_66,CKV_GCP_24,CKV_GCP_69,CKV_GCP_61
+
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [secrets, validate, lint]
+    # Superseded plans on the same PR are noise. Safe to cancel: a plan changes nothing.
+    concurrency:
+      group: terraform-plan-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # Forks cannot mint a token against this pool, and should not be able to plan against real
+      # infrastructure. Failing loudly beats a confusing auth error thirty seconds later.
+      - name: Reject fork pull requests
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::error::Plans do not run on forks. Push a branch to this repository instead."
+          exit 1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.GCP_PROJECT_ID }}-tfstate"
+
+      # -lock=false because a plan makes no writes, and a cancelled plan job holding a state lock
+      # would block the apply that follows the merge.
+      - name: Plan
+        id: plan
+        working-directory: ${{ env.WORKING_DIR }}
+        continue-on-error: true
+        run: terraform plan -no-color -input=false -lock=false 2>&1 | tee plan.txt
+
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let plan = fs.readFileSync('${{ env.WORKING_DIR }}/plan.txt', 'utf8');
+
+            // GitHub rejects comments over 65536 characters.
+            const limit = 60000;
+            if (plan.length > limit) {
+              plan = plan.slice(0, limit) + '\n\n... truncated, see the job log for the full plan';
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### Terraform plan\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`
+            });
+
+      - name: Fail if plan errored
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+  apply:
+    name: Apply
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [secrets, validate, lint, security]
+    # Requires a GitHub Environment named `production`. Add a required reviewer there if you want a
+    # human gate; the branch restriction below is enforced regardless.
+    environment: production
+    # Never cancel a running apply — a killed apply leaves a held state lock and a half-built
+    # dependency graph. Queue instead.
+    concurrency:
+      group: terraform-apply
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      # Impersonates the apply account, which is bound to this repository at refs/heads/main via a
+      # composite repository@ref attribute in the Workload Identity pool. A pull request that edits
+      # this workflow to run apply still cannot obtain these credentials — its ref is
+      # refs/pull/<n>/merge, so the token exchange is refused by IAM.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_APPLY_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.GCP_PROJECT_ID }}-tfstate"
+
+      # Plan to a file, then apply that file. `terraform apply -auto-approve` would re-plan against
+      # whatever the state looks like at that moment; applying a saved plan means what is logged in
+      # the job output is exactly what was executed.
+      - name: Plan
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
+
+      - name: Apply
+        working-directory: ${{ env.WORKING_DIR }}
+        run: terraform apply -no-color -input=false -lock-timeout=5m tfplan
+
+      - name: Summarise
+        if: always()
+        working-directory: ${{ env.WORKING_DIR }}
+        run: |
+          {
+            echo "### Terraform apply"
+            echo
+            echo '```'
+            terraform output -no-color 2>&1 | head -80 || echo "outputs unavailable"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

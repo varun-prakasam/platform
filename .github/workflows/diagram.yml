@@ -1,0 +1,51 @@
+name: diagram
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "diagrams/**"
+  pull_request:
+    paths:
+      - "diagrams/**"
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    name: Render architecture diagram
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install d2
+        run: curl -fsSL https://d2lang.com/install.sh | sh -s --
+
+      - name: Render
+        run: |
+          mkdir -p diagrams/out
+          d2 --layout=elk --theme=1 \
+            diagrams/architecture.d2 diagrams/out/architecture.svg
+
+      # On a PR the render is a correctness check only — a diagram that does not compile should
+      # block the merge, but the committed SVG should come from main.
+      - name: Upload preview
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: architecture-diagram
+          path: diagrams/out/architecture.svg
+
+      - name: Commit rendered diagram
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add diagrams/out/architecture.svg
+          if git diff --staged --quiet; then
+            echo "Diagram unchanged"
+          else
+            git commit -m "chore: re-render architecture diagram"
+            git push
+          fi

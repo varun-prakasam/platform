@@ -1,0 +1,50 @@
+# Project 3: ELT and dimensional modelling (dlt, dbt, BigQuery, Evidence).
+#
+# Template for the other nine. Each project repo owns a k8s/ directory containing its own
+# manifests; this file only declares where they live and how they are synced.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: p03-elt
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Ordering across projects. Lower waves sync first, which matters where one project's tables
+    # are another's inputs.
+    argocd.argoproj.io/sync-wave: "10"
+spec:
+  project: portfolio
+
+  source:
+    repoURL: https://github.com/varun-prakasam/p03-elt.git
+    targetRevision: main
+    path: k8s/overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: p03-elt
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+
+  # CronJob schedules are managed by the cluster once created, and dbt writes run metadata into
+  # the job's own status. Ignoring these prevents a permanent OutOfSync on fields ArgoCD does not
+  # own.
+  ignoreDifferences:
+    - group: batch
+      kind: CronJob
+      jsonPointers:
+        - /spec/jobTemplate/spec/template/metadata/annotations

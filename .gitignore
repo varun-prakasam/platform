@@ -1,0 +1,46 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# .terraform.lock.hcl is deliberately NOT ignored. It pins provider versions and their checksums,
+# so CI resolves the same providers this machine did. Ignoring it means a provider release can
+# silently change what `terraform plan` reports.
+
+# Credentials — nothing in this repo should ever hold a key
+*.json.key
+service-account*.json
+*-key.json
+.env
+.env.*
+!.env.example
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Generated diagrams. The rendered architecture SVG is committed — the website embeds it, and CI
+# keeps it in sync with the D2 source.
+diagrams/out/*
+!diagrams/out/architecture.svg
+
+# Generated ops snapshot. Holds an email address and a full account inventory, and this repo is
+# meant to go public — it is a local dashboard, not portfolio content.
+docs/inventory.html
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
