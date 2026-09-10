@@ -30,15 +30,29 @@ zone   = "us-central1-a"
 budget_amount = 200
 currency_code = "SGD"
 
-# Sized for the platform plus ArgoCD, not for the full ten-project build-out.
+# Sized for the platform, ArgoCD, p03's CronJob and p01's Kafka + Flink.
 #
-#   e2-standard-2  2 vCPU /  8 GiB  ~$49/mo  platform + ArgoCD + the first project or two
-#   e2-highmem-2   2 vCPU / 16 GiB  ~$66/mo  once stateful engines arrive
+#   e2-standard-2  2 vCPU /  8 GiB  ~$49/mo  platform + ArgoCD + one lightweight project
+#   e2-standard-4  4 vCPU / 16 GiB  ~$98/mo  <- here: adds p01's broker and stream processor
+#   e2-highmem-2   2 vCPU / 16 GiB  ~$66/mo  more memory, same 2 vCPU — does not help p01
 #   e2-highmem-4   4 vCPU / 32 GiB ~$132/mo  full ten-project steady state
 #
-# e2-medium is not viable: ~940m allocatable CPU against ~800-1000m requested by Dataplane V2,
-# Workload Identity, managed Prometheus and VPA before any workload schedules.
-base_node_machine_type = "e2-standard-2"
+# CPU binds first, not memory, which is why the highmem shapes cost.md recommends are the wrong
+# answer today: measured on e2-standard-2 the node sat at 66% of CPU requests against 37% of memory.
+# p01 needs ~2100m (Kafka 700m, Strimzi 200m, Flink JM+TM 900m, Flink operator 150m, bridge 150m)
+# against 639m free, so this is a 3x gap rather than a tuning problem.
+#
+# Two e2-standard-2 nodes cost the same $98 and fit less: GKE's system daemons take ~1000m on *every*
+# node, so a second one contributes ~930m usable where a doubled node contributes ~1980m. It would
+# also put Kafka and Flink on separate nodes, adding a network hop to every record.
+#
+# After p01 this node runs at ~87% of CPU requests, and ~94% for the two minutes a day p03's CronJob
+# is running. That is deliberate but it is the ceiling: project 4 forces either the Spot flip
+# (cost.md:47) or e2-highmem-4. Watch for Pending pods — the pool autoscales to 2 and will quietly
+# add another $98/mo node rather than fail.
+#
+# e2-medium is not viable at any point: ~940m allocatable against the ~1000m the system daemons want.
+base_node_machine_type = "e2-standard-4"
 base_node_disk_size_gb = 50
 
 # --- Identity -------------------------------------------------------------------------------------
