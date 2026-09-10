@@ -69,6 +69,15 @@ resource "google_container_cluster" "this" {
     }
   }
 
+  // GKE has not issued client certificates by default since 1.12, so this changes nothing today.
+  // Stated anyway: a client certificate is a credential that cannot be rotated or revoked without
+  // recreating the cluster, and "off because the default happens to be off" is not a control.
+  master_auth {
+    client_certificate_config {
+      issue_client_certificate = false
+    }
+  }
+
   release_channel {
     channel = var.release_channel
   }

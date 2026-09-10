@@ -92,7 +92,7 @@ validate: ## Validate Terraform configuration
 
 .PHONY: plan
 plan: ## Show the execution plan
-	$(TF) plan -out=tfplan
+	$(TF) plan -var-file=prod.tfvars -out=tfplan
 
 .PHONY: apply
 apply: ## Apply the last generated plan
@@ -100,7 +100,7 @@ apply: ## Apply the last generated plan
 
 .PHONY: destroy
 destroy: ## Tear down all platform infrastructure
-	$(TF) destroy
+	$(TF) destroy -var-file=prod.tfvars
 
 # --- Cluster -----------------------------------------------------------------
 

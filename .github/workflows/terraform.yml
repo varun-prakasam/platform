@@ -20,17 +20,16 @@ permissions:
 env:
   TF_VERSION: "1.9.8"
   WORKING_DIR: terraform
-
-  # Input variables come from repository variables via TF_VAR_, not from a -var list. Plan and apply
-  # then read exactly the same inputs — a plan that was reviewed against different values than the
-  # apply uses is worse than no plan at all.
-  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
-  TF_VAR_billing_account_id: ${{ vars.GCP_BILLING_ACCOUNT }}
-  TF_VAR_authorized_networks: ${{ vars.TF_AUTHORIZED_NETWORKS }}
-  TF_VAR_base_node_machine_type: ${{ vars.TF_BASE_NODE_MACHINE_TYPE }}
-  TF_VAR_deployer_service_account_email: ${{ vars.TF_DEPLOYER_SERVICE_ACCOUNT }}
-  TF_VAR_github_owner: ${{ github.repository_owner }}
   TF_IN_AUTOMATION: "true"
+
+# Input variables are defined per job rather than at workflow level, and only on the jobs that
+# actually evaluate expressions — plan and apply. Setting them globally exported
+# TF_VAR_authorized_networks as an empty string to tflint, and an empty string is not a valid value
+# for a list type: it fails to parse where an unset variable would simply have no value. tflint and
+# validate never need inputs, so giving them any is all cost.
+#
+# Plan and apply share one anchor so they cannot drift. A plan reviewed against different values
+# than the apply uses is worse than no plan at all.
 
 jobs:
   secrets:
@@ -140,13 +139,54 @@ jobs:
           #   CKV_GCP_24  private endpoint — kubectl access is needed from a laptop
           #   CKV_GCP_69  private cluster master — same
           #   CKV_GCP_61  VPC flow logs sampling — enabled at 0.1 to control logging cost
-          skip_check: CKV_GCP_66,CKV_GCP_24,CKV_GCP_69,CKV_GCP_61
+          #
+          # Customer-managed encryption. Google-managed keys already encrypt everything at rest;
+          # CSEK/CMEK moves key custody to a KMS keyring that then has to be funded, rotated and
+          # never lost. For public city data that is cost and operational risk for no threat model:
+          #   CKV_GCP_81  BigQuery datasets      CKV_GCP_83  Pub/Sub topics
+          #   CKV_GCP_84  Artifact Registry
+          #
+          # Service account authority. Terraform creates and acts as service accounts, so the
+          # deployer necessarily holds serviceAccountUser and serviceAccountAdmin, and CI holds
+          # viewer to plan. Removing them does not harden the platform, it stops it working:
+          #   CKV_GCP_49  impersonation roles    CKV_GCP_41  token creator / SA user
+          #   CKV_GCP_117 basic roles
+          #
+          # Verified individually rather than waved through:
+          #   CKV_GCP_62   bucket access logging — writes an access log to a second bucket that
+          #                nothing reads, at ongoing storage cost.
+          #   CKV_GCP_78   bucket versioning — the finding is the starrocks scratch bucket, where
+          #                versioning is off by design. The Terraform state bucket is separate and
+          #                has versioning enabled, which is the case that actually matters.
+          #   CKV_GCP_12   network policy — the cluster runs ADVANCED_DATAPATH (Dataplane V2),
+          #                which enforces network policy natively. The check looks for the legacy
+          #                network_policy block, which Dataplane V2 clusters must not set.
+          #   CKV_GCP_65   Google Groups for RBAC — needs a Cloud Identity group to bind, and there
+          #                is one human on this platform.
+          #   CKV_GCP_125  OIDC trust policy — the check wants the repository pinned in
+          #                attribute_condition. It is pinned one layer lower and more strictly: the
+          #                pool condition restricts to this owner, each service account binding
+          #                names an exact repository, and the apply account additionally requires
+          #                @refs/heads/main. A pull request cannot reach the apply identity.
+          skip_check: >-
+            CKV_GCP_66,CKV_GCP_24,CKV_GCP_69,CKV_GCP_61,
+            CKV_GCP_81,CKV_GCP_83,CKV_GCP_84,
+            CKV_GCP_49,CKV_GCP_41,CKV_GCP_117,
+            CKV_GCP_62,CKV_GCP_78,CKV_GCP_12,CKV_GCP_65,CKV_GCP_125
 
   plan:
     name: Plan
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     needs: [secrets, validate, lint]
+    env:
+      # Only the secrets. Everything else comes from terraform/prod.tfvars, which is committed, so
+      # this workflow and a laptop evaluate the same configuration rather than two that happen to
+      # agree. Secrets rather than variables because workflow logs on a public repository print
+      # variable values in the environment dump and mask secrets.
+      TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT }}
+      TF_VAR_authorized_networks: ${{ secrets.TF_AUTHORIZED_NETWORKS }}
+      TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
     # Superseded plans on the same PR are noise. Safe to cancel: a plan changes nothing.
     concurrency:
       group: terraform-plan-${{ github.ref }}
@@ -184,7 +224,7 @@ jobs:
         id: plan
         working-directory: ${{ env.WORKING_DIR }}
         continue-on-error: true
-        run: terraform plan -no-color -input=false -lock=false 2>&1 | tee plan.txt
+        run: terraform plan -no-color -input=false -lock=false -var-file=prod.tfvars 2>&1 | tee plan.txt
 
       - name: Comment plan on PR
         uses: actions/github-script@v7
@@ -215,6 +255,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [secrets, validate, lint, security]
+    env:
+      # Only the secrets. Everything else comes from terraform/prod.tfvars, which is committed, so
+      # this workflow and a laptop evaluate the same configuration rather than two that happen to
+      # agree. Secrets rather than variables because workflow logs on a public repository print
+      # variable values in the environment dump and mask secrets.
+      TF_VAR_billing_account_id: ${{ secrets.GCP_BILLING_ACCOUNT }}
+      TF_VAR_authorized_networks: ${{ secrets.TF_AUTHORIZED_NETWORKS }}
+      TF_VAR_alert_email: ${{ secrets.TF_ALERT_EMAIL }}
     # Requires a GitHub Environment named `production`. Add a required reviewer there if you want a
     # human gate; the branch restriction below is enforced regardless.
     environment: production
@@ -251,7 +299,7 @@ jobs:
       # the job output is exactly what was executed.
       - name: Plan
         working-directory: ${{ env.WORKING_DIR }}
-        run: terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan
+        run: terraform plan -no-color -input=false -lock-timeout=5m -var-file=prod.tfvars -out=tfplan
 
       - name: Apply
         working-directory: ${{ env.WORKING_DIR }}

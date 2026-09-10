@@ -123,14 +123,31 @@ These are identifiers, not secrets, so GitHub *Variables* is the correct place f
 | `WIF_SERVICE_ACCOUNT` | All repos | `github-actions-ci@…` |
 | `WIF_APPLY_ACCOUNT` | `platform` only | `github-actions-apply@…` |
 | `GCP_PROJECT_ID` | All repos | Your project ID |
+
+Terraform's own inputs are **not** here. Everything that is not sensitive lives in
+`terraform/prod.tfvars`, which is committed, so a laptop and a workflow read the same file rather
+than two sets of values that happen to agree. Only three inputs are supplied out of band, and as
+*Secrets* rather than Variables:
+
+| Secret | Scope | Value |
+| --- | --- | --- |
 | `GCP_BILLING_ACCOUNT` | `platform` only | Billing account ID |
 | `TF_AUTHORIZED_NETWORKS` | `platform` only | JSON, e.g. `[{"cidr_block":"203.0.113.42/32","display_name":"home"}]` |
-| `TF_BASE_NODE_MACHINE_TYPE` | `platform` only | e.g. `e2-highmem-2` |
-| `TF_DEPLOYER_SERVICE_ACCOUNT` | `platform` only | The deployer's email |
+| `TF_ALERT_EMAIL` | `platform` only | Where budget and pipeline alerts are delivered |
 
-CI passes these as `TF_VAR_*` environment variables rather than a `-var` list, so the plan a reviewer
-reads and the apply that runs after merge see identical inputs. A plan reviewed against different
-values than the apply uses is worse than no plan at all.
+Secrets, not Variables, because these repositories are public and a workflow log prints an
+environment dump on every run. Variable values appear in it verbatim; secret values are masked. A
+home IP address and a personal email in a world-readable build log is not a hypothetical.
+
+**Why the split exists at all.** Passing every input through the workflow environment meant CI could
+only see the values someone had remembered to add there, while `terraform.tfvars` — the file a
+laptop reads — is gitignored and invisible to it. The first version of this workflow passed six
+inputs and the tfvars file set fourteen. An apply from CI would have read `alert_email` as null and
+`pipeline_heartbeats` as empty, deleting the alerting, and `base_node_disk_size_gb` as 100 rather
+than 50, recreating the node pool. It never ran only because an unrelated lint job failed first.
+
+A committed var file removes the class of bug rather than the instance: a new input is visible to
+both, or to neither.
 
 ## Runtime: one account per workload, per surface
 
