@@ -16,7 +16,7 @@ accounting, one delivery mechanism.
    Public data       │              GKE (zonal, Standard)         │
    sources           │                                            │
         │            │  Flink Operator      StarRocks Operator    │
-        │            │  Strimzi/Redpanda    Spark Operator        │
+        │            │  Strimzi (Kafka)     Spark Operator        │
         └───────────▶│  CloudNativePG       Airflow (K8s exec)    │
                      │  Debezium            Marquez               │
                      └────────────┬───────────────────────────────┘

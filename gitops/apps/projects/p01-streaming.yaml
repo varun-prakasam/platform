@@ -1,0 +1,60 @@
+# Project 1: streaming pipeline (Bluesky Jetstream, Kafka, Flink SQL, BigQuery).
+#
+# Sync wave 5 — after p01-operators (wave 1), which installs the Strimzi and Flink CRDs this
+# application's resources depend on, and before p03-elt (wave 10). Ordering against p03 does not
+# matter today; ordering against projects 5 and 8 will, since both consume this project's Kafka
+# topic.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: p01-streaming
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-wave: "5"
+spec:
+  project: portfolio
+
+  source:
+    repoURL: https://github.com/varun-prakasam/p01-streaming.git
+    targetRevision: main
+    path: k8s/overlays/prod
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: p01-streaming
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+
+  ignoreDifferences:
+    # Strimzi writes observed state back into the Kafka resource it manages, and the Flink operator
+    # does the same for job status, savepoint history and the current job ID. None of it is ours to
+    # own, and reconciling it would fight the operators on every sync.
+    - group: kafka.strimzi.io
+      kind: Kafka
+      jsonPointers:
+        - /status
+    - group: flink.apache.org
+      kind: FlinkDeployment
+      jsonPointers:
+        - /status
+    # Strimzi resolves partition and replica counts onto the topic and records them here; a
+    # KafkaTopic edited through the CR still reconciles, but the echoed status must not diff.
+    - group: kafka.strimzi.io
+      kind: KafkaTopic
+      jsonPointers:
+        - /status
