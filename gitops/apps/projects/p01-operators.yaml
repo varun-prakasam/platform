@@ -45,10 +45,13 @@ spec:
         maxDuration: 10m
 
   ignoreDifferences:
-    # cert-manager is not installed, so the Flink operator's webhook is disabled at install time.
-    # Kubernetes still defaults caBundle on any CRD conversion stanza that survives, and ArgoCD
-    # would report that server-set field as a permanent diff.
+    # The API server adds `spec.conversion: {strategy: None}` to every CRD that omits it, and
+    # neither operator's chart writes one. Without this the five largest CRDs sit permanently
+    # OutOfSync over a field the cluster set itself, and a real drift would be invisible among them.
+    #
+    # Safe to ignore wholesale rather than just the caBundle: nothing here uses a conversion
+    # webhook, both operators serve a single storage version, and cert-manager is not installed.
     - group: apiextensions.k8s.io
       kind: CustomResourceDefinition
       jsonPointers:
-        - /spec/conversion/webhook/clientConfig/caBundle
+        - /spec/conversion
