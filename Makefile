@@ -108,6 +108,18 @@ destroy: ## Tear down all platform infrastructure
 kubeconfig: ## Point kubectl at the platform cluster
 	gcloud container clusters get-credentials $(CLUSTER) --zone $(ZONE)
 
+# `kubectl` hanging with an i/o timeout to the control plane almost always means a new ISP-assigned
+# IP, not a broken cluster. This prints the one line of tfvars that needs updating.
+.PHONY: myip
+myip: ## Show the current public IP in authorized_networks form
+	@ip=$$(curl -s --max-time 15 ifconfig.me); \
+	 cur=$$(grep -o '[0-9.]*/32' terraform/terraform.tfvars | head -1); \
+	 echo "current public IP : $$ip"; \
+	 echo "allowlisted in tfvars: $$cur"; \
+	 if [ "$$ip/32" = "$$cur" ]; then echo "-> match, no change needed"; \
+	 else echo "-> STALE. Set in terraform/terraform.tfvars then re-apply:"; \
+	      echo "     cidr_block   = \"$$ip/32\""; fi
+
 # Server-side apply is required, not preferred: ArgoCD's CRDs exceed the 256 KiB annotation limit
 # that client-side apply uses to store last-applied-configuration, and plain `kubectl apply` fails.
 .PHONY: argocd
