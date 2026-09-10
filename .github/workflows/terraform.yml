@@ -48,9 +48,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git grep -lIE '"type"[[:space:]]*:[[:space:]]*"service_account"' -- . > /tmp/hits 2>/dev/null; then
+          # Both markers, in the same file. A real key carries the private key alongside the type
+          # field; prose that quotes one marker to explain this check carries neither. Matching on
+          # the type field alone failed the build on docs/security.md — the document describing the
+          # rule tripped the rule, which is the kind of false positive that gets a check deleted
+          # rather than fixed.
+          hits=""
+          for f in $(git grep -lIE '"type"[[:space:]]*:[[:space:]]*"service_account"' -- . 2>/dev/null || true); do
+            if grep -qI 'private_key' "$f"; then
+              hits="$hits $f"
+            fi
+          done
+          if [ -n "$hits" ]; then
             echo "::error::Service account key material committed:"
-            cat /tmp/hits
+            for f in $hits; do echo "  $f"; done
             exit 1
           fi
 

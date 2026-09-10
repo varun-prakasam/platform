@@ -60,6 +60,11 @@ variable "ci_roles" {
     "roles/storage.objectAdmin",
     "roles/run.developer",
     "roles/iam.serviceAccountUser",
+    // Submits the image builds. This is the one identity that should hold it: the platform's rule
+    // is that a *pipeline* identity must never be able to run builds as a deploy identity, and CI
+    // is the deploy identity rather than a workload — granting it here is what keeps wl-p03-elt
+    // read-only.
+    "roles/cloudbuild.builds.editor",
   ]
 }
 
