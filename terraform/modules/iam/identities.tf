@@ -32,6 +32,11 @@ locals {
     "roles/iam.workloadIdentityPoolAdmin",
     "roles/pubsub.admin",
     "roles/monitoring.notificationChannelEditor",
+    // Alerting needs all three: a channel to send to, a policy to evaluate, and a log-based metric
+    // for the policy to evaluate against. The channel role alone lets Terraform create somewhere to
+    // send alerts and nothing that would ever send one.
+    "roles/monitoring.alertPolicyEditor",
+    "roles/logging.configWriter",
     "roles/dataplex.admin",
     "roles/aiplatform.admin",
     "roles/run.admin",

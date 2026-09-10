@@ -130,3 +130,27 @@ variable "github_owner" {
   type    = string
   default = null
 }
+
+variable "pipeline_heartbeats" {
+  description = <<-EOT
+    Scheduled pipelines that must report success, keyed by project name.
+
+    Each entry names the Kubernetes namespace the workload runs in and the line its entrypoint
+    prints once every step has succeeded. Successes are counted over a trailing `window` and the
+    alert fires when that window stays empty for `grace` — which catches the case no failure alert
+    can: a pipeline that is not running at all rather than running and failing.
+
+    Time to alert is `window + grace` after the last success. p03-elt runs daily and its CronJob
+    tolerates six hours of lateness, so 24h + 6h alerts about thirty hours after a missed run
+    without ever firing for one that merely started late.
+  EOT
+
+  type = map(object({
+    namespace = string
+    marker    = string
+    window    = optional(string, "86400s")
+    grace     = optional(string, "21600s")
+  }))
+
+  default = {}
+}

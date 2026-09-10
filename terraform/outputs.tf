@@ -75,3 +75,8 @@ output "next_steps" {
 
   EOT
 }
+
+output "pipeline_alerts" {
+  description = "Alert policies watching the scheduled pipelines. Empty when alert_email is unset."
+  value       = module.monitoring.alert_policies
+}

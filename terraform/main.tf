@@ -121,3 +121,19 @@ module "billing" {
 
   depends_on = [module.project_services, module.bigquery]
 }
+
+// Watches the scheduled pipelines rather than the infrastructure. A node going unhealthy is
+// already visible in the console; a nightly job that quietly stops producing data is not, and it is
+// the failure that actually costs something, because everything downstream keeps serving the last
+// good numbers as though nothing happened.
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  project_id   = var.project_id
+  cluster_name = module.gke.cluster_name
+  alert_email  = var.alert_email
+
+  heartbeats = var.pipeline_heartbeats
+
+  depends_on = [module.project_services, module.gke]
+}
