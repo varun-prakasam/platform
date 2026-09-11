@@ -25,6 +25,7 @@ variable "buckets" {
     label used in cost reporting.
 
     Set `delete_after_days` on anything ingested continuously — raw landing zones in particular.
+    Set `delete_prefixes` when part of a bucket must outlive that rule.
   EOT
 
   type = map(object({
@@ -33,6 +34,8 @@ variable "buckets" {
     force_destroy       = optional(bool, false)
     nearline_after_days = optional(number)
     delete_after_days   = optional(number)
+    # Scope the delete rule to these prefixes. Unset, it applies to the whole bucket.
+    delete_prefixes = optional(list(string))
   }))
 
   default = {
@@ -48,8 +51,15 @@ variable "buckets" {
     }
 
     # Flink checkpoints and savepoints (projects 1 and 5). Only the recent ones matter.
+    #
+    # Scoped, not bucket-wide. Flink's HA metadata lives here too, under <project>/ha/, and part of
+    # it is written once at job submission and never rewritten. A seven-day rule over the whole
+    # bucket deletes it on day seven, and the job keeps running green until its first JobManager
+    # restart — which then cannot recover. Checkpoints are safe under the rule because a running job
+    # rewrites them every minute; HA metadata is not. Project 5 adds its own two prefixes here.
     "flink-state" = {
       delete_after_days = 7
+      delete_prefixes   = ["p01/checkpoints/", "p01/savepoints/"]
       force_destroy     = true
     }
 

@@ -39,6 +39,9 @@ resource "google_storage_bucket" "this" {
     content {
       condition {
         age = each.value.delete_after_days
+        # null leaves the attribute unset, which GCS reads as the whole bucket — so every bucket
+        # without delete_prefixes keeps exactly the rule it had.
+        matches_prefix = each.value.delete_prefixes
       }
       action {
         type = "Delete"
